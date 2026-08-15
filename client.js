@@ -4,7 +4,7 @@ window.__ModuleLoader__.load({
     const jsx = require("react/jsx-runtime").jsx;
     const jsxs = require("react/jsx-runtime").jsxs;
     const React = require("react");
-    const { useState, useMemo, useEffect, useRef, useSyncExternalStore } = React;
+    const { useMemo, useSyncExternalStore } = React;
 
     // ── 工具 ──────────────────────────────────────────────────────────
     function textOf(content) {
@@ -42,13 +42,14 @@ window.__ModuleLoader__.load({
 
     // ── 样式 ──────────────────────────────────────────────────────────
     const BASE_CSS = `
-.dqa-wrap { position: relative; }
-.dqa-trigger { border: none; background: transparent; cursor: pointer; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 13px; padding: 5px 10px; border-radius: 8px; white-space: nowrap; }
-.dqa-trigger:hover { color: var(--dsw-alias-label-primary); background: var(--dsw-alias-interactive-bg-hover); }
-.dqa-trigger.open { color: var(--dsw-alias-brand-primary); }
-.dqa-panel { position: absolute; top: calc(100% + 6px); right: 0; z-index: 1200; width: 340px; max-width: 80vw; max-height: 56vh; display: flex; flex-direction: column; background: var(--dsw-alias-bg-overlay, #fff); border: 1px solid var(--dsw-alias-border-l2); border-radius: 10px; box-shadow: 0 12px 32px rgba(0,0,0,0.28); overflow: hidden; }
-.dqa-head { padding: 8px 12px; border-bottom: 1px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 18px; }
-.dqa-list { overflow-y: auto; padding: 4px; }
+.dqa-rail { position: fixed; top: 0; right: 0; bottom: 0; z-index: 1100; width: 16px; background: var(--dsw-alias-bg-overlay, #fff); border-left: 1px solid var(--dsw-alias-border-l2); overflow: hidden; transition: width 0.2s ease; }
+.dqa-rail::before { content: ""; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 4px; height: 44px; border-radius: 4px; background: var(--dsw-alias-border-l2); transition: opacity 0.15s; }
+.dqa-rail:hover { width: 300px; box-shadow: -12px 0 32px rgba(0,0,0,0.18); }
+.dqa-rail:hover::before { opacity: 0; }
+.dqa-rail-panel { display: flex; flex-direction: column; height: 100%; width: 300px; opacity: 0; pointer-events: none; transition: opacity 0.15s; }
+.dqa-rail:hover .dqa-rail-panel { opacity: 1; pointer-events: auto; }
+.dqa-rail-head { display: flex; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-primary); font-size: 13px; line-height: 20px; white-space: nowrap; }
+.dqa-list { overflow-y: auto; padding: 6px; flex: 1; }
 .dqa-item { box-sizing: border-box; display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; border: none; border-radius: 8px; background: transparent; color: var(--dsw-alias-label-primary); font: inherit; font-size: 13px; cursor: pointer; text-align: left; }
 .dqa-item:hover { background: var(--dsw-alias-interactive-bg-hover); }
 .dqa-num { flex: none; min-width: 20px; text-align: right; color: var(--dsw-alias-label-tertiary); font-size: 11px; }
@@ -56,10 +57,8 @@ window.__ModuleLoader__.load({
 .dqa-empty { padding: 18px; text-align: center; color: var(--dsw-alias-label-tertiary); font-size: 13px; }
 `;
 
-    // ── 组件：会话头部按钮 + 问答锚点下拉 ─────────────────────────────
+    // ── 组件：右侧悬浮历史 rail（收起为占位横岗，悬停展开）────────────
     function AnchorButton({ sessionId, sessions }) {
-      const [open, setOpen] = useState(false);
-      const wrapRef = useRef(null);
       const snapshot = useSyncExternalStore(
         (fn) => {
           const s = sessionId ? sessions?.binding(sessionId)?.session : undefined;
@@ -72,33 +71,14 @@ window.__ModuleLoader__.load({
       );
       const anchors = useMemo(() => buildAnchors(snapshot), [snapshot]);
 
-      useEffect(() => {
-        if (!open) return;
-        const onDown = (e) => {
-          if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
-        };
-        document.addEventListener("mousedown", onDown);
-        return () => document.removeEventListener("mousedown", onDown);
-      }, [open]);
-
       const jump = (key) => {
         const el = findAnchor(key);
         if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-        setOpen(false);
       };
 
-      return jsxs("div", { ref: wrapRef, className: "dqa-wrap", children: [
-        jsx("button", {
-          type: "button",
-          className: "dqa-trigger" + (open ? " open" : ""),
-          onClick: () => setOpen(v => !v),
-          "aria-expanded": open,
-          "aria-haspopup": "listbox",
-          title: "问答锚点",
-          children: "问答"
-        }),
-        open ? jsxs("div", { className: "dqa-panel", children: [
-          jsx("div", { className: "dqa-head", children: anchors.length ? `共 ${anchors.length} 轮问答，点击跳转` : "问答锚点" }),
+      return jsxs("div", { className: "dqa-rail", children: [
+        jsxs("div", { className: "dqa-rail-panel", children: [
+          jsx("div", { className: "dqa-rail-head", children: anchors.length ? `对话历史（${anchors.length}）` : "对话历史" }),
           jsx("div", { className: "dqa-list", children: anchors.length
             ? anchors.map((a, i) => jsxs("button", {
                 key: a.key,
@@ -113,7 +93,7 @@ window.__ModuleLoader__.load({
               }))
             : jsx("div", { className: "dqa-empty", children: "暂无问答" })
           })
-        ] }) : null
+        ] })
       ] });
     }
 
