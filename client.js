@@ -4,35 +4,49 @@ window.__ModuleLoader__.load({
     const jsx = require("react/jsx-runtime").jsx;
     const jsxs = require("react/jsx-runtime").jsxs;
     const React = require("react");
-    const { useState, useEffect, useMemo, useSyncExternalStore } = React;
+    const { useState, useEffect, useSyncExternalStore } = React;
+    const { createPortal } = require("react-dom");
 
-    // ── 工具 ──────────────────────────────────────────────────────────
-    function textOf(content) {
-      return (content || [])
-        .map(b => (b && b.type === "text" ? String(b.text || "") : ""))
-        .filter(Boolean)
-        .join(" ")
-        .replace(/\s+/g, " ")
-        .trim();
+    // ── 样式（我们的：横条 + 蓝色当前，干净）────────────────────────
+    const CSS = `
+.dqa-rail { position: fixed; z-index: 900; width: 16px; display: flex; flex-direction: column; box-sizing: border-box; }
+.dqa-bar { position: relative; flex: none; width: 16px; height: 3px; border-radius: 2px; border: none; padding: 0; cursor: pointer; background: var(--dsw-alias-label-tertiary); transition: transform 0.12s ease, background 0.12s ease; }
+.dqa-bar:hover, .dqa-bar:focus-visible { transform: scaleX(1.6); background: var(--dsw-alias-label-primary); }
+.dqa-bar.active { background: var(--dsw-alias-state-business-primary); }
+.dqa-card { position: fixed; z-index: 950; width: min(300px, calc(100vw - 16px)); max-height: 200px; display: flex; flex-direction: column; background: var(--dsw-alias-bg-overlay, #fff); border: 1px solid var(--dsw-alias-border-l2); border-radius: 10px; box-shadow: 0 12px 32px rgba(0,0,0,0.28); pointer-events: none; overflow: hidden; }
+.dqa-card-head { flex: none; padding: 6px 12px; border-bottom: 1px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-tertiary); font-size: 11px; line-height: 16px; }
+.dqa-card-text { padding: 10px 13px; color: var(--dsw-alias-label-primary); font-size: 12px; line-height: 18px; white-space: pre-wrap; overflow-wrap: anywhere; overflow-y: auto; }
+.dqa-flash { animation: dqaFlash 1.2s ease-out; }
+@keyframes dqaFlash { 0%,100% { background-color: transparent; } 35% { background-color: var(--dsw-alias-state-business-primary); } }
+`;
+
+    // ── 数据 ──────────────────────────────────────────────────────────
+    function userTextOf(content) {
+      if (!Array.isArray(content)) return "";
+      let out = "";
+      for (const b of content) {
+        if (b && typeof b === "object" && b.type === "text" && typeof b.text === "string") out += b.text;
+      }
+      return out.trim();
     }
 
-    // 从会话快照构建问答锚点：每项 {key, text}
-    function buildAnchors(snapshot) {
-      if (!snapshot || !snapshot.chat) return [];
-      const bySeq = {};
-      for (const n of snapshot.nodes || []) {
-        if (n.kind === "user") bySeq[n.seq] = n;
-      }
+    // 从已加载的 chat 节点收集用户消息
+    function collectFromNodes(snapshot) {
       const out = [];
-      for (const key of (snapshot.chat.order || [])) {
-        const vn = snapshot.chat.nodes.get(key);
-        if (!vn || vn.kind !== "user") continue;
-        const raw = bySeq[vn.anchorSeq];
-        out.push({ key, text: raw ? textOf(raw.content) : "" });
+      if (!snapshot || !snapshot.chat) return out;
+      for (const node of snapshot.chat.nodes.values()) {
+        if (!node || node.kind !== "user") continue;
+        const data = node.data;
+        if (!data || typeof data.time !== "number" || !Array.isArray(data.content)) continue;
+        const key = typeof node.key === "string" ? node.key : "";
+        if (!key) continue;
+        out.push({ seq: node.anchorSeq, time: data.time, text: userTextOf(data.content), key });
       }
+      out.sort((a, b) => a.seq - b.seq);
       return out;
     }
 
+    // 找到 key 对应的聊天行 DOM
     function findAnchor(key) {
       for (const el of document.querySelectorAll("[data-chat-anchor-key]")) {
         if (el.dataset.chatAnchorKey === key) return el;
@@ -40,141 +54,187 @@ window.__ModuleLoader__.load({
       return null;
     }
 
-    // 当前视口里最靠近顶部的问答 key（用于滚动时更新聚焦）
-    function currentKeyInView(anchors) {
-      const byKey = {};
-      for (const el of document.querySelectorAll("[data-chat-anchor-key]")) {
-        byKey[el.dataset.chatAnchorKey] = el;
+    const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    // 确保消息在已加载窗口内，然后居中跳转 + 闪烁
+    async function jumpToMessage(sessions, sessionId, key) {
+      const session = sessions.binding(sessionId)?.session;
+      if (!session) return;
+      let guard = 0;
+      while (guard++ < 120) {
+        const snap = session.getSnapshot();
+        if (snap?.chat?.nodes?.get(key) !== undefined) break;
+        if (snap?.hasMore !== true) return;
+        if (snap.loadingOlder === true) { await delay(50); continue; }
+        await session.loadOlder();
       }
-      let current = null;
-      // 阈值取视口上半区：问题顶部在上半屏都算「当前」，避免刚露出问题就跳到上一条
-      const threshold = Math.max(200, window.innerHeight * 0.5);
-      for (const a of anchors) {
-        const el = byKey[a.key];
-        if (!el) continue;
-        const top = el.getBoundingClientRect().top;
-        if (top <= threshold) current = a.key;
-        else break;
-      }
-      return current;
+      const row = findAnchor(key);
+      if (!row) return;
+      const reduced = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      row.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "center" });
+      row.classList.add("dqa-flash");
+      setTimeout(() => row.classList.remove("dqa-flash"), 1400);
     }
 
-    // ── 样式 ──────────────────────────────────────────────────────────
-    const BASE_CSS = `
-/* 外层 hover 容器：右侧窄条热区（40px），统一控制展开/收缩 */
-.history-hover-zone { position: fixed; top: 0; right: 0; bottom: 0; width: 40px; z-index: 1100; }
-/* 收缩态：一列短横条（每条历史对应一根） */
-.history-bars { position: absolute; right: 15px; top: 0; bottom: 0; width: 16px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; box-sizing: border-box; overflow: hidden; transition: opacity 0.2s ease; }
-.history-bar { flex: none; width: 16px; height: 3px; border-radius: 2px; background: var(--dsw-alias-label-tertiary); }
-.history-bar.current { background: var(--dsw-alias-state-business-primary); }
-/* 展开态：完整面板（从右向左滑入，覆盖显示，不挤压主内容） */
-.history-panel { position: absolute; right: 0; top: 0; bottom: 0; width: 300px; max-width: calc(100vw - 56px); display: flex; flex-direction: column; background: var(--dsw-alias-bg-overlay, #fff); border-left: 1px solid var(--dsw-alias-border-l2); box-shadow: -12px 0 32px rgba(0,0,0,0.2); opacity: 0; transform: translateX(100%); pointer-events: none; transition: opacity 0.22s ease, transform 0.22s ease; }
-.history-hover-zone:hover .history-bars { opacity: 0; }
-.history-hover-zone:hover .history-panel { opacity: 1; transform: translateX(0); pointer-events: auto; }
-/* 面板内容 */
-.history-head { display: flex; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-primary); font-size: 13px; line-height: 20px; white-space: nowrap; }
-.history-list { overflow-y: auto; overflow-x: hidden; padding: 6px; flex: 1; }
-.history-list::-webkit-scrollbar { width: 6px; }
-.history-list::-webkit-scrollbar-thumb { background: var(--dsw-alias-border-l2); border-radius: 3px; }
-.history-list::-webkit-scrollbar-track { background: transparent; }
-.history-item { box-sizing: border-box; display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 8px 10px; border: none; border-radius: 8px; background: transparent; color: var(--dsw-alias-label-primary); font: inherit; font-size: 13px; line-height: 20px; cursor: pointer; text-align: left; }
-.history-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.history-item:hover .history-title { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
-.history-mark { flex-shrink: 0; align-self: center; width: 14px; height: 3px; border-radius: 2px; background: var(--dsw-alias-label-tertiary); }
-.history-item:hover .history-mark { background: var(--dsw-alias-label-primary); }
-.history-item.active { background: var(--dsw-alias-interactive-bg-hover); }
-.history-item.active .history-title { color: var(--dsw-alias-state-business-primary); }
-.history-item.active .history-mark { background: var(--dsw-alias-state-business-primary); }
-.history-empty { padding: 18px; text-align: center; color: var(--dsw-alias-label-tertiary); font-size: 13px; }
-`;
+    // 自适应间距：让横条铺满可用高度（数量多时间距收缩）
+    function layoutBars(n, height) {
+      if (n <= 0) return { bar: 3, gap: 8 };
+      const pad = 14;
+      const usable = Math.max(1, height - pad * 2);
+      const bar = n > 60 ? 2 : 3;
+      const gap = n > 1 ? Math.max(2, (usable - n * bar) / (n - 1)) : 0;
+      return { bar, gap };
+    }
 
-    // ── 组件：右侧历史会话面板（默认收缩为一列横条，悬停展开）────────
-    function AnchorButton({ sessionId, sessions }) {
-      const snapshot = useSyncExternalStore(
-        (fn) => {
-          const s = sessionId ? sessions?.binding(sessionId)?.session : undefined;
-          return s ? s.subscribe(fn) : () => {};
-        },
-        () => {
-          const s = sessionId ? sessions?.binding(sessionId)?.session : undefined;
-          return s ? s.getSnapshot() : undefined;
-        }
-      );
-      const anchors = useMemo(() => buildAnchors(snapshot), [snapshot]);
-      const [viewKey, setViewKey] = useState(null);
+    function fmtClock(ms) {
+      const d = new Date(ms);
+      const p = (n) => String(n).padStart(2, "0");
+      return (d.getMonth() + 1) + "/" + d.getDate() + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+    }
 
-      // 跟随滚动：实时更新「当前聚焦」的问答
-      useEffect(() => {
-        let raf = 0;
-        const onScroll = () => {
-          if (raf) return;
-          raf = requestAnimationFrame(() => {
-            raf = 0;
-            setViewKey(currentKeyInView(anchors));
-          });
-        };
-        window.addEventListener("scroll", onScroll, true);
-        onScroll();
-        return () => {
-          window.removeEventListener("scroll", onScroll, true);
-          if (raf) cancelAnimationFrame(raf);
-        };
-      }, [anchors]);
-
-      // 当前项：优先滚动位置；无则默认最后一条
-      const currentKey = viewKey || (anchors.length ? anchors[anchors.length - 1].key : null);
-
-      const jump = (key) => {
-        setViewKey(key);
-        const el = findAnchor(key);
-        if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-      };
-
-      return jsxs("div", { className: "history-hover-zone", children: [
-        jsx("div", { className: "history-bars", "aria-hidden": "true", children: anchors.map((a) =>
-          jsx("span", { key: "bar-" + a.key, className: "history-bar" + (a.key === currentKey ? " current" : "") })
-        ) }),
-        jsxs("aside", { className: "history-panel", children: [
-          jsx("div", { className: "history-head", children: anchors.length ? `对话历史（${anchors.length}）` : "对话历史" }),
-          jsx("div", { className: "history-list", children: anchors.length
-            ? anchors.map((a) => jsxs("button", {
-                key: a.key,
-                type: "button",
-                className: "history-item" + (a.key === currentKey ? " active" : ""),
-                onClick: () => jump(a.key),
-                children: [
-                  jsx("span", { className: "history-title", children: a.text || "（无文本）" }),
-                  jsx("span", { className: "history-mark", "aria-hidden": "true" })
-                ]
-              }))
-            : jsx("div", { className: "history-empty", children: "暂无问答" })
-          })
-        ] })
+    // ── 悬停预览卡片 ──────────────────────────────────────────────────
+    function PreviewCard({ message, index, total, railLeft }) {
+      const left = Math.max(8, railLeft - 300 - 12);
+      const top = Math.max(8, window.innerHeight / 2 - 100);
+      return jsxs("div", { className: "dqa-card", style: { left, top }, children: [
+        jsx("div", { className: "dqa-card-head", children: index + " / " + total + " · " + fmtClock(message.time) }),
+        message.text ? jsx("div", { className: "dqa-card-text", children: message.text.slice(0, 500) }) : jsx("div", { className: "dqa-card-text", children: "（无文本内容）" })
       ] });
     }
 
+    // ── 主组件：右侧横条导航 rail ─────────────────────────────────────
+    function MessageRail({ sessionId, sessions }) {
+      const session = sessionId ? sessions?.binding(sessionId)?.session : undefined;
+      const snapshot = useSyncExternalStore(
+        (cb) => (session ? session.subscribe(cb) : () => {}),
+        () => (session ? session.getSnapshot() : undefined)
+      );
+      const messages = collectFromNodes(snapshot);
+
+      const [railRect, setRailRect] = useState(null);
+      const [hover, setHover] = useState(null);
+      const [activeIndex, setActiveIndex] = useState(-1);
+
+      // 后台 loadOlder 加载完整历史
+      useEffect(() => {
+        if (!session) return;
+        let cancelled = false;
+        const run = async () => {
+          let guard = 0;
+          while (!cancelled && guard++ < 120) {
+            const snap = session.getSnapshot();
+            if (snap?.hasMore !== true) return;
+            if (snap.loadingOlder === true) { await delay(50); continue; }
+            await session.loadOlder();
+          }
+        };
+        run().catch(() => {});
+        return () => { cancelled = true; };
+      }, [sessionId, session]);
+
+      // 测量 rail 位置 + 滚动追踪当前
+      useEffect(() => {
+        let last = null;
+        const measure = () => {
+          const el = document.querySelector("[data-conversation-scroll]");
+          const next = el === null
+            ? { left: Math.max(16, window.innerWidth - 26), top: 64, height: Math.min(480, Math.max(160, window.innerHeight * 0.62)) }
+            : (() => {
+                const r = el.getBoundingClientRect();
+                return { left: Math.max(8, Math.min(r.right + 10, window.innerWidth - 26)), top: r.top + 44, height: Math.max(120, r.height - 88) };
+              })();
+          const same = last !== null && last.left === next.left && last.top === next.top && last.height === next.height;
+          if (!same) { last = next; setRailRect(next); }
+        };
+        const updateActive = () => {
+          const sp = document.querySelector("[data-conversation-scroll]");
+          if (!sp || messages.length === 0) return;
+          const rect = sp.getBoundingClientRect();
+          if (rect.height === 0) return;
+          const line = rect.top + rect.height * 0.4;
+          let best = -1, bestDist = Infinity;
+          for (let i = 0; i < messages.length; i++) {
+            const el = findAnchor(messages[i].key);
+            if (!el) continue;
+            const r = el.getBoundingClientRect();
+            const dist = Math.abs(r.top + r.height / 2 - line);
+            if (dist < bestDist) { bestDist = dist; best = i; }
+          }
+          setActiveIndex(best);
+        };
+        measure();
+        updateActive();
+        window.addEventListener("resize", measure);
+        const sp = document.querySelector("[data-conversation-scroll]");
+        let ro = null;
+        if (typeof ResizeObserver !== "undefined" && sp !== null) { ro = new ResizeObserver(measure); ro.observe(sp); }
+        let scrollTimer = null;
+        const onScroll = () => {
+          if (scrollTimer !== null) return;
+          scrollTimer = setTimeout(() => { scrollTimer = null; updateActive(); }, 60);
+        };
+        if (sp !== null) sp.addEventListener("scroll", onScroll, { passive: true });
+        const timer = setInterval(() => { measure(); updateActive(); }, 2000);
+        return () => {
+          window.removeEventListener("resize", measure);
+          if (scrollTimer !== null) clearTimeout(scrollTimer);
+          if (sp !== null) sp.removeEventListener("scroll", onScroll);
+          clearInterval(timer);
+          if (ro !== null) ro.disconnect();
+        };
+      }, [sessionId, messages.length]);
+
+      if (!sessionId || messages.length < 2 || railRect === null) return null;
+
+      const { bar, gap } = layoutBars(messages.length, railRect.height);
+      const moveFocus = (e, i) => {
+        let next = i;
+        if (e.key === "ArrowDown") next = Math.min(messages.length - 1, i + 1);
+        else if (e.key === "ArrowUp") next = Math.max(0, i - 1);
+        else if (e.key === "Home") next = 0;
+        else if (e.key === "End") next = messages.length - 1;
+        else return;
+        e.preventDefault();
+        const bars = e.currentTarget.parentElement?.querySelectorAll("button.dqa-bar");
+        bars?.[next]?.focus();
+      };
+
+      return createPortal(jsx("div", { className: "dqa-rail", style: { left: railRect.left, top: railRect.top, height: railRect.height }, role: "navigation", "aria-label": "消息导航", children:
+        messages.map((m, i) => jsx("button", {
+          key: m.seq,
+          type: "button",
+          className: "dqa-bar" + (activeIndex === i ? " active" : ""),
+          style: { height: bar, marginBottom: i < messages.length - 1 ? gap : 0 },
+          tabIndex: i === (activeIndex >= 0 ? activeIndex : 0) ? 0 : -1,
+          title: m.text ? m.text.slice(0, 200) : "（无文本内容）",
+          "aria-label": "用户: " + (m.text.slice(0, 60) || "（无文本内容）"),
+          "aria-current": activeIndex === i ? "location" : undefined,
+          onMouseEnter: () => setHover({ message: m, index: i + 1 }),
+          onMouseLeave: () => setHover(null),
+          onFocus: () => setHover({ message: m, index: i + 1 }),
+          onBlur: () => setHover(null),
+          onKeyDown: (e) => moveFocus(e, i),
+          onClick: () => jumpToMessage(sessions, sessionId, m.key).catch(() => {})
+        }))
+      }), document.body);
+    }
+
     // ── apply ──────────────────────────────────────────────────────────
-    const inject = ["slots"];
+    const inject = ["slots", "sessions"];
 
     function apply(ctx) {
       if (typeof document === "undefined") return;
-
-      const styleTag = document.createElement("style");
-      styleTag.dataset.plugin = "dsh-qa-anchors";
-      styleTag.textContent = BASE_CSS;
-      document.head.appendChild(styleTag);
-
-      ctx.inject(["slots", "conversation", "sessions"], (scope) => {
-        scope.effect(() => {
-          const dispose = scope.slots.register({
-            name: "conversation.session.header.actions", id: "qa-anchors", order: 10,
-            inject: () => ({ sessions: scope.sessions })
-          }, AnchorButton);
-          return () => { dispose(); };
-        }, "dsh-qa-anchors: header action");
-      });
-
-      ctx.effect(() => () => { styleTag.remove(); }, "dsh-qa-anchors: cleanup");
+      if (!document.querySelector('style[data-plugin-css="dsh-qa-anchors/base.css"]')) {
+        const tag = document.createElement("style");
+        tag.dataset.plugin = "dsh-qa-anchors";
+        tag.dataset.pluginCss = "dsh-qa-anchors/base.css";
+        tag.textContent = CSS;
+        document.head.appendChild(tag);
+      }
+      ctx.slots.inject("conversation.input.dock", () => ctx.slots.register({
+        name: "conversation.input.dock", id: "qa-anchors", order: 40,
+        inject: () => ({ sessions: ctx.sessions })
+      }, MessageRail));
     }
 
     return { apply, inject };
