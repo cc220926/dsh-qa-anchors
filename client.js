@@ -4,7 +4,7 @@ window.__ModuleLoader__.load({
     const jsx = require("react/jsx-runtime").jsx;
     const jsxs = require("react/jsx-runtime").jsxs;
     const React = require("react");
-    const { useMemo, useSyncExternalStore } = React;
+    const { useState, useMemo, useSyncExternalStore } = React;
 
     // ── 工具 ──────────────────────────────────────────────────────────
     function textOf(content) {
@@ -49,11 +49,18 @@ window.__ModuleLoader__.load({
 .dqa-rail-panel { display: flex; flex-direction: column; height: 100%; width: 300px; opacity: 0; pointer-events: none; transition: opacity 0.15s; }
 .dqa-rail:hover .dqa-rail-panel { opacity: 1; pointer-events: auto; }
 .dqa-rail-head { display: flex; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-primary); font-size: 13px; line-height: 20px; white-space: nowrap; }
-.dqa-list { overflow-y: auto; padding: 6px; flex: 1; }
-.dqa-item { box-sizing: border-box; display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; border: none; border-radius: 8px; background: transparent; color: var(--dsw-alias-label-primary); font: inherit; font-size: 13px; cursor: pointer; text-align: left; }
-.dqa-item:hover { background: var(--dsw-alias-interactive-bg-hover); }
-.dqa-num { flex: none; min-width: 20px; text-align: right; color: var(--dsw-alias-label-tertiary); font-size: 11px; }
-.dqa-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dqa-list { overflow-y: auto; overflow-x: hidden; padding: 6px; flex: 1; }
+.dqa-list::-webkit-scrollbar { width: 6px; }
+.dqa-list::-webkit-scrollbar-thumb { background: var(--dsw-alias-border-l2); border-radius: 3px; }
+.dqa-list::-webkit-scrollbar-track { background: transparent; }
+.dqa-item { box-sizing: border-box; display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 8px 10px; border: none; border-radius: 8px; background: transparent; color: var(--dsw-alias-label-primary); font: inherit; font-size: 13px; line-height: 20px; cursor: pointer; text-align: left; }
+.dqa-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dqa-item:hover .dqa-title { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
+.dqa-mark { flex-shrink: 0; align-self: center; width: 14px; height: 3px; border-radius: 2px; background: var(--dsw-alias-label-tertiary); }
+.dqa-item:hover .dqa-mark { background: var(--dsw-alias-label-primary); }
+.dqa-item.active { background: var(--dsw-alias-interactive-bg-hover); }
+.dqa-item.active .dqa-title { color: var(--dsw-alias-brand-primary); }
+.dqa-item.active .dqa-mark { background: var(--dsw-alias-brand-primary); }
 .dqa-empty { padding: 18px; text-align: center; color: var(--dsw-alias-label-tertiary); font-size: 13px; }
 `;
 
@@ -70,8 +77,10 @@ window.__ModuleLoader__.load({
         }
       );
       const anchors = useMemo(() => buildAnchors(snapshot), [snapshot]);
+      const [activeKey, setActiveKey] = useState(null);
 
       const jump = (key) => {
+        setActiveKey(key);
         const el = findAnchor(key);
         if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
       };
@@ -80,15 +89,14 @@ window.__ModuleLoader__.load({
         jsxs("div", { className: "dqa-rail-panel", children: [
           jsx("div", { className: "dqa-rail-head", children: anchors.length ? `对话历史（${anchors.length}）` : "对话历史" }),
           jsx("div", { className: "dqa-list", children: anchors.length
-            ? anchors.map((a, i) => jsxs("button", {
+            ? anchors.map((a) => jsxs("button", {
                 key: a.key,
                 type: "button",
-                className: "dqa-item",
-                title: a.text || "（无文本）",
+                className: "dqa-item" + (activeKey === a.key ? " active" : ""),
                 onClick: () => jump(a.key),
                 children: [
-                  jsx("span", { className: "dqa-num", children: String(i + 1) }),
-                  jsx("span", { className: "dqa-text", children: a.text || "（无文本）" })
+                  jsx("span", { className: "dqa-title", children: a.text || "（无文本）" }),
+                  jsx("span", { className: "dqa-mark", "aria-hidden": "true" })
                 ]
               }))
             : jsx("div", { className: "dqa-empty", children: "暂无问答" })
