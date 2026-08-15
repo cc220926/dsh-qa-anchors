@@ -4,7 +4,7 @@ window.__ModuleLoader__.load({
     const jsx = require("react/jsx-runtime").jsx;
     const jsxs = require("react/jsx-runtime").jsxs;
     const React = require("react");
-    const { useState, useMemo, useSyncExternalStore } = React;
+    const { useState, useEffect, useMemo, useSyncExternalStore } = React;
 
     // ── 工具 ──────────────────────────────────────────────────────────
     function textOf(content) {
@@ -38,6 +38,23 @@ window.__ModuleLoader__.load({
         if (el.dataset.chatAnchorKey === key) return el;
       }
       return null;
+    }
+
+    // 当前视口里最靠近顶部的问答 key（用于滚动时更新聚焦）
+    function currentKeyInView(anchors) {
+      const byKey = {};
+      for (const el of document.querySelectorAll("[data-chat-anchor-key]")) {
+        byKey[el.dataset.chatAnchorKey] = el;
+      }
+      let current = null;
+      for (const a of anchors) {
+        const el = byKey[a.key];
+        if (!el) continue;
+        const top = el.getBoundingClientRect().top;
+        if (top <= 150) current = a.key;
+        else break;
+      }
+      return current;
     }
 
     // ── 样式 ──────────────────────────────────────────────────────────
@@ -82,12 +99,31 @@ window.__ModuleLoader__.load({
         }
       );
       const anchors = useMemo(() => buildAnchors(snapshot), [snapshot]);
-      const [activeKey, setActiveKey] = useState(null);
-      // 当前项：默认最后一条（最近一轮），点击后变为被点击项
-      const currentKey = activeKey || (anchors.length ? anchors[anchors.length - 1].key : null);
+      const [viewKey, setViewKey] = useState(null);
+
+      // 跟随滚动：实时更新「当前聚焦」的问答
+      useEffect(() => {
+        let raf = 0;
+        const onScroll = () => {
+          if (raf) return;
+          raf = requestAnimationFrame(() => {
+            raf = 0;
+            setViewKey(currentKeyInView(anchors));
+          });
+        };
+        window.addEventListener("scroll", onScroll, true);
+        onScroll();
+        return () => {
+          window.removeEventListener("scroll", onScroll, true);
+          if (raf) cancelAnimationFrame(raf);
+        };
+      }, [anchors]);
+
+      // 当前项：优先滚动位置；无则默认最后一条
+      const currentKey = viewKey || (anchors.length ? anchors[anchors.length - 1].key : null);
 
       const jump = (key) => {
-        setActiveKey(key);
+        setViewKey(key);
         const el = findAnchor(key);
         if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
       };
