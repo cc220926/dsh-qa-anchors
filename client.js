@@ -45,7 +45,7 @@ window.__ModuleLoader__.load({
 /* 外层 hover 容器：右侧窄条热区（40px），统一控制展开/收缩 */
 .history-hover-zone { position: fixed; top: 0; right: 0; bottom: 0; width: 40px; z-index: 1100; }
 /* 收缩态：一列短横条（每条历史对应一根） */
-.history-bars { position: absolute; right: 0; top: 0; bottom: 0; width: 16px; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 14px 0; box-sizing: border-box; overflow: hidden; transition: opacity 0.2s ease; }
+.history-bars { position: absolute; right: 0; top: 0; bottom: 0; width: 16px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; box-sizing: border-box; overflow: hidden; transition: opacity 0.2s ease; }
 .history-bar { flex: none; width: 16px; height: 3px; border-radius: 2px; background: var(--dsw-alias-label-tertiary); }
 .history-bar.current { background: var(--dsw-alias-state-business-primary); }
 /* 展开态：完整面板（从右向左滑入，覆盖显示，不挤压主内容） */
