@@ -47,11 +47,13 @@ window.__ModuleLoader__.load({
         byKey[el.dataset.chatAnchorKey] = el;
       }
       let current = null;
+      // 阈值取视口上半区：问题顶部在上半屏都算「当前」，避免刚露出问题就跳到上一条
+      const threshold = Math.max(200, window.innerHeight * 0.5);
       for (const a of anchors) {
         const el = byKey[a.key];
         if (!el) continue;
         const top = el.getBoundingClientRect().top;
-        if (top <= 150) current = a.key;
+        if (top <= threshold) current = a.key;
         else break;
       }
       return current;
